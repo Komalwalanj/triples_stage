@@ -1,0 +1,102 @@
+---
+# Workflow image
+image:
+  name: hashicorp/terraform:0.13.2
+  entrypoint:
+    - "/usr/bin/env"
+    - "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+variables:
+  #TF_ROOT: ${CI_PROJECT_DIR}\${TF_ENV_PATH}  # The relative path to the root directory of the Terraform project
+  PLAN: plan.cache
+  PLAN_JSON: plan.json
+
+before_script:
+  #  - cd ${TF_ROOT}
+  - touch ~/.git-credentials
+  - git config --global credential.helper store
+  - echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@git.syngentaaws.org" > ~/.git-credentials
+
+
+.terraform-ver-init: &terraform-ver-init
+  - terraform version
+  # Provides git the ability to access other private projects for use as remote Terraform modules
+  - terraform init
+
+stages:
+  - init
+  - validate
+  - plan
+  - apply
+
+init:
+  stage: init
+  tags: [triples-stage-gitlabrunner]
+  script:
+    - *terraform-ver-init
+  artifacts:
+    paths:
+
+validate:
+  stage: validate
+  tags: [triples-stage-gitlabrunner]
+  before_script:
+    - *terraform-ver-init
+  dependencies:
+    - init
+  script:
+    - terraform validate
+  allow_failure: false
+
+plan:
+  stage: plan
+  tags: [triples-stage-gitlabrunner]
+  before_script:
+    - *terraform-ver-init
+  dependencies:
+    - init
+    - validate
+  script:
+    - terraform plan -out "terraform.tfplan"
+    - terraform show --json "terraform.tfplan"
+  artifacts:
+    name: plan
+    paths:
+      - terraform.tfplan
+  allow_failure: false
+
+apply:
+  stage: apply
+  tags: [triples-stage-gitlabrunner]
+  before_script:
+    - *terraform-ver-init
+    - terraform plan -out "terraform.tfplan"
+  environment:
+    name: ${ENVIRONMENT}
+    on_stop: destroy
+  dependencies:
+    - init
+    - plan
+  script:
+    - terraform apply -auto-approve -input=false "terraform.tfplan"
+  when: manual
+  only:
+    - main
+
+# Job: Destroy | Stage: Apply
+# Purpose: Stop and destroy the resources configured by Terraform
+destroy:
+  stage: apply
+  tags: [triples-stage-gitlabrunner]
+  before_script:
+    - *terraform-ver-init
+  script:
+    - terraform destroy -auto-approve
+  when: manual
+  only:
+    - main
+  environment:
+    name: ${ENVIRONMENT}
+    action: stop
+  retry: 1
+
